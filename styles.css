@@ -101,6 +101,12 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);line-he
 .np-nav__auto{background:transparent;border:1px solid var(--border);color:var(--text-dim);font-size:0.64rem;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:700;text-transform:uppercase;letter-spacing:.04em;transition:all .15s}
 .np-nav__auto:hover{border-color:var(--green);color:var(--green)}
 .np-nav__auto--active{background:var(--green);color:#fff;border-color:var(--green)}
+
+/* ── Target position toggle (P1/P2/P3) ──────────────── */
+.np-tgt-row{display:flex;gap:2px}
+.np-tgt{background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);font-size:0.6rem;padding:1px 6px;border-radius:3px;cursor:pointer;font-weight:700;font-family:var(--font-mono);transition:all .15s}
+.np-tgt:hover{border-color:var(--isu-blue);color:var(--isu-blue)}
+.np-tgt--active{background:var(--isu-blue);color:#fff;border-color:var(--isu-blue)}
 .np-names{display:grid;grid-template-columns:1fr 1fr;gap:var(--gap);margin-bottom:0.35rem}
 .np-namebox{display:flex;align-items:center;gap:clamp(6px,0.5vw,12px);padding:clamp(10px,1.2vh,22px) clamp(10px,1vw,24px);background:var(--surface-2);border:1px solid var(--border);border-radius:6px}
 .np-namebox--left{justify-content:flex-end;text-align:right}

@@ -22,6 +22,8 @@ const DISTANCES={
     {key:"d_10000",label:"10.000m",meters:10000,divisor:20,compId:16},
   ],
 };
+// Slot distance qualification (allround only, null for sprint)
+const SLOT_CONFIG={qualIdx:1,slotIdx:3,maxRiders:8};
 
 
 // ── UTILS ───────────────────────────────────────────────
@@ -60,7 +62,7 @@ function getPBraw(g,name,distKey){
 }
 
 // ── STATE ───────────────────────────────────────────────
-const state={gender:"v",view:"overview",selectedDist:"d_500",pollDist:"all",tile3Mode:"startlist",npPair:null,npDonePair:null,npDoneAt:0};
+const state={gender:"v",view:"overview",selectedDist:"d_500",pollDist:"all",tile3Mode:"startlist",npPair:null,npHoldPair:0,npHoldAt:0,npHeldPairs:new Set(),npTarget:1};
 const dataCache={v:{},m:{}};
 const startListCache={v:{},m:{}};
 const pbCache={v:{},m:{}}; // {gender: {distKey: {normalizedName: timeString}}}
@@ -463,6 +465,7 @@ function render(){
   for(const d of ds)views.push({key:`dist_${d.key}`,icon:"⏱",label:d.label});
   views.push({key:"_sep2",sep:true});
   views.push({key:"klassement",icon:"🏆",label:"Standings"});
+  if(SLOT_CONFIG)views.push({key:"slotafstand",icon:"🎯",label:"Slotafstand"});
   views.push({key:"deelnemers",icon:"👥",label:"Deelnemers"});
   const navHtml=views.map(v=>v.sep?'<div class="nav-sep"></div>':`<button class="nav-btn ${state.view===v.key?'active':''}" data-view="${v.key}"><span class="nav-btn__icon">${v.icon}</span>${esc(v.label)}</button>`).join("");
   el.navButtons.innerHTML=navHtml;el.mobileNav.innerHTML=navHtml;
@@ -470,6 +473,7 @@ function render(){
   if(state.view==="overview")return renderOverview();
   if(state.view.startsWith("dist_")){return renderDistance(state.view.replace("dist_",""))}
   if(state.view==="klassement")return renderKlassement();
+  if(state.view==="slotafstand"&&SLOT_CONFIG)return renderSlotafstand();
   if(state.view==="deelnemers")return renderDeelnemers();
   renderOverview();
 }
@@ -519,8 +523,8 @@ function renderOverview(){
         <div class="tile-body" id="tile4Body"></div>
       </div>
     </div>`;
-  document.getElementById("distSel")?.addEventListener("change",e=>{state.selectedDist=e.target.value;state.npPair=null;state.npDonePair=null;render()});
-  document.querySelectorAll("[data-t3mode]").forEach(b=>b.addEventListener("click",e=>{state.tile3Mode=e.target.dataset.t3mode;state.npPair=null;state.npDonePair=null;render()}));
+  document.getElementById("distSel")?.addEventListener("change",e=>{state.selectedDist=e.target.value;state.npPair=null;state.npHoldPair=0;state.npHeldPairs.clear();render()});
+  document.querySelectorAll("[data-t3mode]").forEach(b=>b.addEventListener("click",e=>{state.tile3Mode=e.target.dataset.t3mode;state.npPair=null;state.npHoldPair=0;state.npHeldPairs.clear();render()}));
   fillTile1(selDist);fillTile2();
   if(state.tile3Mode==="nextpair")fillTile3NextPair(selDist);else fillTile3(selDist);
   fillTile4(nextDist);
@@ -632,23 +636,23 @@ function fillTile3NextPair(dist){
     // Auto mode with 20s hold on finished pair
     const now=Date.now();
     if(autoNext&&!autoNext.allDone){
-      // There's a next unfinished pair
       const prevPairNum=autoNext.pairNum-1;
-      if(prevPairNum>=1){
+      if(prevPairNum>=1&&!state.npHeldPairs.has(prevPairNum)){
+        // Previous pair exists and we haven't held for it yet
         const prevPair=getPairByNum(dist,prevPairNum);
         if(prevPair?.allDone){
-          // Previous pair is done — should we still show it?
-          if(state.npDonePair!==prevPairNum){
-            // First time we see this pair is done: record timestamp
-            state.npDonePair=prevPairNum;
-            state.npDoneAt=now;
+          if(state.npHoldPair!==prevPairNum){
+            // First detection: start hold timer
+            state.npHoldPair=prevPairNum;
+            state.npHoldAt=now;
           }
-          if(now-state.npDoneAt<20000){
-            // Within 20s: keep showing finished pair
+          if(now-state.npHoldAt<20000){
+            // Still within 20s: show finished pair
             pair=prevPair;
           }else{
-            // 20s passed: advance
-            state.npDonePair=null;
+            // 20s passed: mark as held, advance
+            state.npHeldPairs.add(prevPairNum);
+            state.npHoldPair=0;
             pair=autoNext;
           }
         }else{
@@ -667,7 +671,7 @@ function fillTile3NextPair(dist){
   }
   const{pairNum,skaters,allDone}=pair;
   const isAuto=state.npPair==null;
-  const holdSec=isAuto&&allDone&&state.npDonePair===pairNum?Math.max(0,Math.ceil((20000-(Date.now()-state.npDoneAt))/1000)):0;
+  const holdSec=isAuto&&allDone&&state.npHoldPair===pairNum?Math.max(0,Math.ceil((20000-(Date.now()-state.npHoldAt))/1000)):0;
   const holdLabel=holdSec>0?` <span style="color:var(--orange);font-size:0.64rem">next ${holdSec}s</span>`:"";
 
   // Navigation HTML
@@ -682,8 +686,8 @@ function fillTile3NextPair(dist){
   if(skaters.length===1){
     const s=skaters[0];
     const a=standings?.all?.find(x=>x.name===s.name);
-    const lPts=standings?.leader?.currentPoints;
-    const nt=a?neededTime(a,dist.key,lPts):null;
+    const tgtPtsSolo=standings?.ranked?.[state.npTarget-1]?.currentPoints;
+    const nt=a&&Number.isFinite(tgtPtsSolo)?neededTime(a,dist.key,tgtPtsSolo):null;
     const ntStr=Number.isFinite(nt)&&nt>0?fmtTime(nt):"";
     body.innerHTML=`<div style="padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -694,7 +698,7 @@ function fillTile3NextPair(dist){
       ${a?`<div class="stat-grid" style="margin-bottom:8px">
         <div class="stat-box"><div class="stat-box__label">Rank</div><div class="stat-box__value">#${a.rank??"—"}</div></div>
         <div class="stat-box"><div class="stat-box__label">Points</div><div class="stat-box__value">${fmtPts(a.currentPoints)}</div></div>
-        <div class="stat-box"><div class="stat-box__label">Target P1</div><div class="stat-box__value">${ntStr||"—"}</div></div>
+        <div class="stat-box"><div class="stat-box__label">Target P${state.npTarget}</div><div class="stat-box__value">${ntStr||"—"}</div></div>
       </div>`:""}
     </div>`;
     bindNpNav(dist,totalPairs);
@@ -712,23 +716,29 @@ function fillTile3NextPair(dist){
   const lPts=standings?.leader?.currentPoints;
   const leaderName=standings?.leader?shortName(standings.leader.name):"P1";
 
-  // Time to lead: what time must the rider ride on THIS distance to match P1?
-  // Formula: target = (leader_total − rider_other_pts) × divisor
-  // Where rider_other_pts = rider's points on all distances EXCEPT the selected one
-  function calcTarget(rider){
-    if(!rider||!Number.isFinite(lPts))return null;
+  // Time to position: what time must the rider ride to reach P1/P2/P3?
+  // Formula: target = (targetPts − rider_other_pts) × divisor
+  function calcTarget(rider,targetPts){
+    if(!rider||!Number.isFinite(targetPts))return null;
     let otherPts=0;
     for(const d of ds){
-      if(d.key===dist.key)continue;// skip selected distance
+      if(d.key===dist.key)continue;
       const p=rider.points[d.key];
       if(Number.isFinite(p))otherPts+=p;
     }
-    const target=(lPts-otherPts)*dist.divisor;
+    const target=(targetPts-otherPts)*dist.divisor;
     return target>0?target:null;
   }
-  const targetA=calcTarget(rA);
-  const targetB=calcTarget(rB);
-  const isLeaderA=rA.rank===1,isLeaderB=rB.rank===1;
+  // Get points for P1, P2, P3
+  const p1Pts=standings?.ranked?.[0]?.currentPoints;
+  const p2Pts=standings?.ranked?.[1]?.currentPoints;
+  const p3Pts=standings?.ranked?.[2]?.currentPoints;
+  const tgt=state.npTarget;
+  const tgtPts=tgt===1?p1Pts:tgt===2?p2Pts:p3Pts;
+  const tgtName=tgt===1?shortName(standings?.ranked?.[0]?.name??""):tgt===2?shortName(standings?.ranked?.[1]?.name??""):shortName(standings?.ranked?.[2]?.name??"");
+  const targetA=calcTarget(rA,tgtPts);
+  const targetB=calcTarget(rB,tgtPts);
+  const isAtTarget=(r)=>r.rank!=null&&r.rank<=tgt;
 
   // Mutual difference in points → time on this distance
   const ptsDiff=Number.isFinite(pA)&&Number.isFinite(pB)?pA-pB:null;
@@ -787,25 +797,30 @@ function fillTile3NextPair(dist){
     </table>
     <div class="np-cards">
       <div class="np-cards__section">
-        <div class="np-cards__label">🎯 ${allDone?"Klassement na rit":"Tijd voor P1 op "+esc(dist.label)}</div>
+        <div class="np-cards__label" style="display:flex;justify-content:space-between;align-items:center">
+          <span>🎯 ${allDone?"Klassement na rit":`Tijd voor P${tgt} op ${esc(dist.label)}`}</span>
+          <span class="np-tgt-row">
+            <button class="np-tgt${tgt===1?" np-tgt--active":""}" data-nptgt="1">P1</button>
+            <button class="np-tgt${tgt===2?" np-tgt--active":""}" data-nptgt="2">P2</button>
+            <button class="np-tgt${tgt===3?" np-tgt--active":""}" data-nptgt="3">P3</button>
+          </span>
+        </div>
         <div class="np-cards__pair">
           ${(()=>{
             const doneA=Number.isFinite(rA.seconds[dist.key]);
             const doneB=Number.isFinite(rB.seconds[dist.key]);
-            const rkClsA=rA.rank===1?"np-card--green":rA.rank<=3?"np-card--ttl":"np-card--ttl";
-            const rkClsB=rB.rank===1?"np-card--green":rB.rank<=3?"np-card--ttl":"np-card--ttl";
             let cardA,cardB;
             if(doneA){
-              cardA=`<div class="np-card ${rA.rank===1?"np-card--green":"np-card--ttl"}"><div class="np-card__time">#${rA.rank}</div></div>`;
-            }else if(isLeaderA){
-              cardA=`<div class="np-card np-card--green"><div class="np-card__time">LEADER</div></div>`;
+              cardA=`<div class="np-card ${isAtTarget(rA)?"np-card--green":"np-card--ttl"}"><div class="np-card__time">#${rA.rank}</div></div>`;
+            }else if(isAtTarget(rA)){
+              cardA=`<div class="np-card np-card--green"><div class="np-card__time">P${rA.rank}</div></div>`;
             }else{
               cardA=`<div class="np-card np-card--ttl"><div class="np-card__time">${Number.isFinite(targetA)?fmtTime(targetA):"—"}</div></div>`;
             }
             if(doneB){
-              cardB=`<div class="np-card ${rB.rank===1?"np-card--green":"np-card--ttl"}"><div class="np-card__time">#${rB.rank}</div></div>`;
-            }else if(isLeaderB){
-              cardB=`<div class="np-card np-card--green"><div class="np-card__time">LEADER</div></div>`;
+              cardB=`<div class="np-card ${isAtTarget(rB)?"np-card--green":"np-card--ttl"}"><div class="np-card__time">#${rB.rank}</div></div>`;
+            }else if(isAtTarget(rB)){
+              cardB=`<div class="np-card np-card--green"><div class="np-card__time">P${rB.rank}</div></div>`;
             }else{
               cardB=`<div class="np-card np-card--ttl"><div class="np-card__time">${Number.isFinite(targetB)?fmtTime(targetB):"—"}</div></div>`;
             }
@@ -836,8 +851,11 @@ function bindNpNav(dist,totalPairs){
     if(cur<totalPairs){state.npPair=cur+1;render()}
   });
   document.getElementById("npAuto")?.addEventListener("click",()=>{
-    state.npPair=null;state.npDonePair=null;render();
+    state.npPair=null;state.npHoldPair=0;state.npHeldPairs.clear();render();
   });
+  document.querySelectorAll("[data-nptgt]").forEach(b=>b.addEventListener("click",e=>{
+    state.npTarget=parseInt(e.target.dataset.nptgt);render();
+  }));
 }
 
 function fillTile4(nextDist){
@@ -959,6 +977,112 @@ function renderDeelnemers(){
     inactive[g].has(n)?inactive[g].delete(n):inactive[g].add(n);
     saveInactive();render();
   });
+}
+
+// ── SLOTAFSTAND QUALIFICATION ──────────────────────────
+function computeSlotQualification(){
+  if(!SLOT_CONFIG||!standings?.ranked?.length)return null;
+  const ds=getDists(),g=state.gender;
+  const qualDist=ds[SLOT_CONFIG.qualIdx];// 3000m (v) or 5000m (m)
+  const slotDist=ds[SLOT_CONFIG.slotIdx];// 5000m (v) or 10.000m (m)
+  if(!qualDist||!slotDist)return null;
+  const max=SLOT_CONFIG.maxRiders||8;
+
+  // Top 8 from standings (active riders with results)
+  const standTop=standings.ranked.slice(0,max).map(a=>a.name);
+
+  // Top 8 from qualifier distance results
+  const qualResults=(dataCache[g][qualDist.key]??[]).sort((a,b)=>a.seconds-b.seconds);
+  const qualTop=qualResults.slice(0,max).map(r=>r.name);
+
+  // Step 1: auto-qualified = in BOTH top 8s
+  const autoSet=new Set(standTop.filter(n=>qualTop.includes(n)));
+
+  // Step 2: fill remaining spots
+  const qualified=new Set(autoSet);
+  if(qualified.size<max){
+    // Group A: top 8 qual but NOT in top 8 standings → ordered by qual rank
+    const groupA=qualTop.filter(n=>!standTop.includes(n)&&!qualified.has(n));
+    // Group B: top 8 standings but NOT in top 8 qual → ordered by standings rank
+    const groupB=standTop.filter(n=>!qualTop.includes(n)&&!qualified.has(n));
+
+    let iA=0,iB=0;
+    while(qualified.size<max&&(iA<groupA.length||iB<groupB.length)){
+      const candA=iA<groupA.length?groupA[iA]:null;
+      const candB=iB<groupB.length?groupB[iB]:null;
+      if(candA&&!candB){qualified.add(candA);iA++}
+      else if(candB&&!candA){qualified.add(candB);iB++}
+      else if(candA&&candB){
+        const rankA=qualTop.indexOf(candA)+1;// qual rank (1-based)
+        const rankB=standTop.indexOf(candB)+1;// standings rank (1-based)
+        if(rankA<rankB){qualified.add(candA);iA++}
+        else if(rankB<rankA){qualified.add(candB);iB++}
+        else{qualified.add(candB);iB++}// tie: standings wins
+      }else break;
+    }
+  }
+
+  // Build detailed list
+  const allNames=new Set([...standTop,...qualTop]);
+  const rows=[...allNames].map(name=>{
+    const sRank=standTop.indexOf(name)+1||null;// 0 → null
+    const qRank=qualTop.indexOf(name)+1||null;
+    const inStandTop=sRank!=null&&sRank<=max;
+    const inQualTop=qRank!=null&&qRank<=max;
+    const isQualified=qualified.has(name);
+    const a=standings.all.find(x=>x.name===name);
+    const qResult=qualResults.find(r=>r.name===name);
+    return{name,country:a?.country??"",sRank,qRank,inStandTop,inQualTop,isQualified,
+      points:a?.currentPoints,qualTime:qResult?.seconds,auto:autoSet.has(name)};
+  });
+
+  // Sort: qualified first (by standings rank), then rest
+  rows.sort((a,b)=>{
+    if(a.isQualified!==b.isQualified)return a.isQualified?-1:1;
+    return(a.sRank||99)-(b.sRank||99);
+  });
+
+  return{rows,qualDist,slotDist,max,qualifiedCount:qualified.size};
+}
+
+function renderSlotafstand(){
+  if(!SLOT_CONFIG||!standings)return;
+  const result=computeSlotQualification();
+  if(!result){
+    el.contentArea.innerHTML=`<div style="padding:40px;text-align:center;color:var(--text-muted)">Geen data beschikbaar</div>`;
+    return;
+  }
+  const{rows,qualDist,slotDist,max,qualifiedCount}=result;
+  const g=state.gender==="v"?"Women":"Men";
+
+  const tableRows=rows.map((r,i)=>{
+    const cls=r.isQualified?"":"style=\"opacity:.45\"";
+    const qBadge=r.auto?'<span style="color:var(--green);font-size:0.64rem;font-weight:700">AUTO</span>':
+      r.isQualified?'<span style="color:var(--orange);font-size:0.64rem;font-weight:700">RESERVE</span>':"";
+    const sRankStr=r.sRank?`<span class="${r.inStandTop?"":"" }" style="${r.inStandTop?"color:var(--green)":"color:var(--text-muted)"}">${r.sRank}</span>`:"—";
+    const qRankStr=r.qRank?`<span style="${r.inQualTop?"color:var(--green)":"color:var(--text-muted)"}">${r.qRank}</span>`:"—";
+    const icon=r.isQualified?"✅":"❌";
+    return`<tr ${cls}><td>${icon}</td><td><span class="athlete" data-name="${esc(r.name)}">${esc(r.name)}</span> <span class="country">${esc(r.country)}</span></td><td class="mono">${sRankStr}</td><td class="mono">${r.qualTime?fmtTime(r.qualTime):"—"}</td><td class="mono">${qRankStr}</td><td class="mono">${r.points?fmtPts(r.points):"—"}</td><td>${qBadge}</td></tr>`;
+  }).join("");
+
+  el.contentArea.innerHTML=`
+    <h2 style="font-size:1.15rem;font-weight:800;margin-bottom:0.5rem">Slotafstand — ${g}</h2>
+    <div style="font-size:0.85rem;color:var(--text-dim);margin-bottom:1rem">
+      Kwalificatie voor <strong>${esc(slotDist.label)}</strong> · Max ${max} rijders · Kwalificatie via ${esc(qualDist.label)} + klassement
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--gap);margin-bottom:1rem">
+      <div class="stat-box"><div class="stat-box__label">Geplaatst</div><div class="stat-box__value" style="color:var(--green)">${qualifiedCount}</div></div>
+      <div class="stat-box"><div class="stat-box__label">Max</div><div class="stat-box__value">${max}</div></div>
+      <div class="stat-box"><div class="stat-box__label">Open plekken</div><div class="stat-box__value">${Math.max(0,max-qualifiedCount)}</div></div>
+    </div>
+    <div class="table-wrap"><table class="tbl">
+      <thead><tr><th></th><th>Naam</th><th>Klass.</th><th>${esc(qualDist.label)}</th><th>Rank ${esc(qualDist.label)}</th><th>Punten</th><th>Status</th></tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table></div>
+    <div class="info-box" style="margin-top:1rem">
+      <strong>Regels:</strong> Top 8 klassement + top 8 ${esc(qualDist.label)} = automatisch geplaatst (AUTO).
+      Resterende plekken: laagste rank uit óf ${esc(qualDist.label)} óf klassement gaat door. Bij gelijke rank gaat klassement voor.
+    </div>`;
 }
 
 // ── POPUP: Athlete ──────────────────────────────────────
