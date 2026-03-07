@@ -60,7 +60,7 @@ function getPBraw(g,name,distKey){
 }
 
 // ── STATE ───────────────────────────────────────────────
-const state={gender:"v",view:"overview",selectedDist:"d_500",pollDist:"all",tile3Mode:"startlist",npPair:null};
+const state={gender:"v",view:"overview",selectedDist:"d_500",pollDist:"all",tile3Mode:"startlist",npPair:null,npDonePair:null,npDoneAt:0};
 const dataCache={v:{},m:{}};
 const startListCache={v:{},m:{}};
 const pbCache={v:{},m:{}}; // {gender: {distKey: {normalizedName: timeString}}}
@@ -519,8 +519,8 @@ function renderOverview(){
         <div class="tile-body" id="tile4Body"></div>
       </div>
     </div>`;
-  document.getElementById("distSel")?.addEventListener("change",e=>{state.selectedDist=e.target.value;state.npPair=null;render()});
-  document.querySelectorAll("[data-t3mode]").forEach(b=>b.addEventListener("click",e=>{state.tile3Mode=e.target.dataset.t3mode;state.npPair=null;render()}));
+  document.getElementById("distSel")?.addEventListener("change",e=>{state.selectedDist=e.target.value;state.npPair=null;state.npDonePair=null;render()});
+  document.querySelectorAll("[data-t3mode]").forEach(b=>b.addEventListener("click",e=>{state.tile3Mode=e.target.dataset.t3mode;state.npPair=null;state.npDonePair=null;render()}));
   fillTile1(selDist);fillTile2();
   if(state.tile3Mode==="nextpair")fillTile3NextPair(selDist);else fillTile3(selDist);
   fillTile4(nextDist);
@@ -625,10 +625,41 @@ function fillTile3NextPair(dist){
   const totalPairs=autoNext?.totalPairs||getAllPairs(dist).size;
   let pair;
   if(state.npPair!=null){
+    // Manual mode
     pair=getPairByNum(dist,state.npPair);
-    if(!pair)pair=autoNext;// fallback if manual pair doesn't exist
+    if(!pair)pair=autoNext;
   }else{
-    pair=autoNext;
+    // Auto mode with 20s hold on finished pair
+    const now=Date.now();
+    if(autoNext&&!autoNext.allDone){
+      // There's a next unfinished pair
+      const prevPairNum=autoNext.pairNum-1;
+      if(prevPairNum>=1){
+        const prevPair=getPairByNum(dist,prevPairNum);
+        if(prevPair?.allDone){
+          // Previous pair is done — should we still show it?
+          if(state.npDonePair!==prevPairNum){
+            // First time we see this pair is done: record timestamp
+            state.npDonePair=prevPairNum;
+            state.npDoneAt=now;
+          }
+          if(now-state.npDoneAt<20000){
+            // Within 20s: keep showing finished pair
+            pair=prevPair;
+          }else{
+            // 20s passed: advance
+            state.npDonePair=null;
+            pair=autoNext;
+          }
+        }else{
+          pair=autoNext;
+        }
+      }else{
+        pair=autoNext;
+      }
+    }else{
+      pair=autoNext;
+    }
   }
 
   if(!pair||!pair.skaters.length){
@@ -636,10 +667,8 @@ function fillTile3NextPair(dist){
   }
   const{pairNum,skaters,allDone}=pair;
   const isAuto=state.npPair==null;
-  // Auto-advance: if auto mode and pair is done, check if next pair exists
-  if(isAuto&&allDone&&autoNext&&!autoNext.allDone){
-    // auto already points to next unfinished
-  }
+  const holdSec=isAuto&&allDone&&state.npDonePair===pairNum?Math.max(0,Math.ceil((20000-(Date.now()-state.npDoneAt))/1000)):0;
+  const holdLabel=holdSec>0?` <span style="color:var(--orange);font-size:0.64rem">next ${holdSec}s</span>`:"";
 
   // Navigation HTML
   const navHtml=`<div class="np-nav">
@@ -743,7 +772,7 @@ function fillTile3NextPair(dist){
 
   body.innerHTML=`<div class="np-wrap">
     <div class="np-header">
-      <span style="font-size:0.92rem;font-weight:700">Rit ${pairNum}${allDone?' <span style="color:var(--green);font-size:0.78rem">✓ All done</span>':""}${!isAuto?' <span style="color:var(--orange);font-size:0.64rem">MANUAL</span>':""}</span>
+      <span style="font-size:0.92rem;font-weight:700">Rit ${pairNum}${allDone?' <span style="color:var(--green);font-size:0.78rem">✓ All done</span>':""}${holdLabel}${!isAuto?' <span style="color:var(--orange);font-size:0.64rem">MANUAL</span>':""}</span>
       ${navHtml}
     </div>
     <div class="np-names">
@@ -807,7 +836,7 @@ function bindNpNav(dist,totalPairs){
     if(cur<totalPairs){state.npPair=cur+1;render()}
   });
   document.getElementById("npAuto")?.addEventListener("click",()=>{
-    state.npPair=null;render();
+    state.npPair=null;state.npDonePair=null;render();
   });
 }
 
